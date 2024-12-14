@@ -1,0 +1,126 @@
+services:
+  - type: web
+    name: whatsapp-service
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+
+    # Variables de entorno esenciales
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: USE_REDIS
+        value: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY_ID
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_CLIENT_ID
+        sync: false
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 900000
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: 100
+      - key: LOG_LEVEL
+        value: info
+
+    # Configuración de escalado
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+      targetMemoryPercent: 80
+      targetCPUPercent: 80
+
+    # Configuración de disco
+    disk:
+      name: tmp
+      mountPath: /tmp
+      sizeGB: 1
+
+    # Configuración de health check
+    healthCheck:
+      httpPath: /health
+      port: 3001
+      initialDelaySeconds: 10
+      periodSeconds: 30
+      timeoutSeconds: 5
+      successThreshold: 1
+      failureThreshold: 3
+
+    # Configuración de métricas
+    metrics:
+      enabled: true
+      port: 3001
+      path: /metrics
+
+    # Headers de seguridad
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-store
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-XSS-Protection
+        value: 1; mode=block
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+
+    # Rutas
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: /api/$1
+      - type: redirect
+        source: /
+        destination: /health
+        statusCode: 302
+
+    # Configuración de servicio
+    services:
+      redis:
+        enabled: false
+
+    # Configuración de límites
+    limits:
+      memory: 512
+      maxRequestSize: 10485760 # 10MB
+      timeout: 30
+
+    # Configuración adicional
+    features:
+      healthMonitoring: true
+      autoScaling: false
+      customDomains: true
+      metrics: true
+
+    # Configuración de logs
+    logging:
+      accessLogs: true
+      applicationLogs: true
+      errorLogs: true
