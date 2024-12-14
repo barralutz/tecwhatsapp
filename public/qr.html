@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WhatsApp QR Code</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f0f2f5;
+            font-family: Arial, sans-serif;
+        }
+        #qrImage {
+            max-width: 300px;
+            margin: 20px;
+            border: 10px solid white;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            margin: 20px;
+            padding: 10px 20px;
+            border-radius: 5px;
+            background: #fff;
+            box-shadow: 0 0 5px rgba(0,0,0,0.05);
+        }
+    </style>
+</head>
+<body>
+    <div class="status" id="status">Esperando código QR...</div>
+    <img id="qrImage" style="display: none;">
+    <script>
+        const userId = window.location.pathname.split('/').pop();
+        let qrChecks = 0;
+        const MAX_QR_CHECKS = 30; // 2.5 minutos máximo de espera
+
+        async function checkStatus() {
+            try {
+                if (qrChecks >= MAX_QR_CHECKS) {
+                    document.getElementById('status').textContent = 'Tiempo de espera agotado. Por favor, recarga la página.';
+                    return;
+                }
+
+                const response = await fetch(`/api/qr/${userId}`);
+                const data = await response.json();
+                
+                const statusDiv = document.getElementById('status');
+                const qrImage = document.getElementById('qrImage');
+                
+                if (data.status === 'connected') {
+                    statusDiv.textContent = '¡WhatsApp conectado exitosamente!';
+                    qrImage.style.display = 'none';
+                    return; // No más chequeos necesarios
+                } else if (data.qr) {
+                    statusDiv.textContent = 'Escanea este código QR con WhatsApp';
+                    qrImage.src = data.qr;
+                    qrImage.style.display = 'block';
+                    qrChecks++;
+                } else {
+                    statusDiv.textContent = 'Inicializando conexión...';
+                    qrImage.style.display = 'none';
+                }
+                
+                setTimeout(checkStatus, 5000);
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('status').textContent = 'Error de conexión. Reintentando...';
+                setTimeout(checkStatus, 5000);
+            }
+        }
+        
+        checkStatus();
+    </script>
+</body>
+</html>

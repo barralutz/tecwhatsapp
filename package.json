@@ -1,28 +1,24 @@
 {
-  "name": "whatsapp-service",
-  "version": "1.0.0",
-  "description": "WhatsApp messaging service",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test": "jest"
-  },
-  "dependencies": {
-    "axios": "^1.7.9",
-    "better-queue": "^3.8.12",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "express-rate-limit": "^7.1.5",
-    "firebase-admin": "^11.11.1",
-    "helmet": "^7.1.0"
-  },
-  "devDependencies": {
-    "jest": "^29.7.0",
-    "nodemon": "^3.0.1"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "name": "whatsapp-service",
+    "version": "1.0.0",
+    "description": "WhatsApp messaging service using Baileys",
+    "main": "index.js",
+    "scripts": {
+      "dev": "nodemon --ignore 'auth/*' --ignore '*.json' --ignore 'public/*' --delay 2.5 index.js",
+      "start": "node index.js"
+    },
+    "dependencies": {
+      "@whiskeysockets/baileys": "^6.5.0",
+      "axios": "^1.7.9",
+      "cors": "^2.8.5",
+      "dotenv": "^16.3.1",
+      "express": "^4.18.2",
+      "firebase-admin": "^13.0.1",
+      "better-queue": "^3.8.12",
+      "qrcode": "^1.5.3",
+      "pino": "^8.19.0"
+    },
+    "devDependencies": {
+      "nodemon": "^3.0.1"
+    }
   }
-}

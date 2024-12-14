@@ -1,166 +1,97 @@
 const express = require('express');
 const cors = require('cors');
-const { initializeFirebase, checkConnection } = require('./lib/firebase');
+const path = require('path');
+const { initializeFirebase } = require('./lib/firebase');
 const messageRouter = require('./routes/messages');
-const https = require('https');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
 
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', 1);
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuración de seguridad básica
-app.use(helmet());
-
-// Configurar CORS
-const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  maxAge: 86400 // 24 horas
-};
-app.use(cors(corsOptions));
-
-// Límite de velocidad para las solicitudes
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100, // límite de 100 solicitudes por ventana por IP
-  message: 'Too many requests from this IP, please try again later.'
-});
-app.use('/api', limiter);
-
-// Middleware para parsear JSON con límite de tamaño
-app.use(express.json({ limit: '10mb' }));
-
-// Middleware de logging mejorado
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode} ${duration}ms`);
-  });
-  next();
-});
-
-// Inicializar Firebase
-initializeFirebase();
-
-// Health check mejorado
+// Health check endpoint
 app.get('/health', async (req, res) => {
   try {
-    const isFirebaseConnected = await checkConnection();
-    
-    // Verificar el estado general del servicio
-    const status = {
+    res.json({ 
+      status: 'ok', 
       timestamp: new Date().toISOString(),
-      service: 'ok',
-      firebase: isFirebaseConnected ? 'connected' : 'disconnected',
-      environment: process.env.NODE_ENV,
-      uptime: process.uptime()
-    };
+      version: 'baileys'
+    });
+  } catch (error) {
+    console.error('Health check failed:', error);
+    res.status(500).json({ status: 'error', error: error.message });
+  }
+});
 
-    // Si Firebase no está conectado, devolver 500
-    if (!isFirebaseConnected) {
-      return res.status(500).json({
-        ...status,
-        error: 'Firebase connection failed'
+// Página de login de WhatsApp
+app.get('/login/:userId', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'qr.html'));
+});
+
+// QR code endpoint
+app.get('/api/qr/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { getConnection } = require('./lib/baileys');
+    
+    const connection = await getConnection(userId);
+    
+    if (connection.qr) {
+      res.json({
+        success: true,
+        qr: connection.qr,
+        status: 'pending'
+      });
+    } else if (connection.connected) {
+      res.json({
+        success: true,
+        status: 'connected'
+      });
+    } else {
+      res.json({
+        success: true,
+        status: 'initializing'
       });
     }
-
-    res.json(status);
   } catch (error) {
-    console.error('Health check error:', error);
+    console.error('QR error:', error);
     res.status(500).json({
-      timestamp: new Date().toISOString(),
-      service: 'error',
+      success: false,
       error: error.message
     });
   }
 });
 
-// Rutas
+// Initialize Firebase
+(async () => {
+  try {
+    await initializeFirebase();
+  } catch (error) {
+    console.error('Failed to initialize Firebase:', error);
+  }
+})();
+
 app.use('/api/messages', messageRouter);
 
-// Manejador de errores mejorado
+// Error handler
 app.use((err, req, res, next) => {
-  console.error('Error:', {
-    message: err.message,
-    stack: err.stack,
-    timestamp: new Date().toISOString(),
-    path: req.path,
-    method: req.method
-  });
-
-  // Determinar el código de estado apropiado
-  const statusCode = err.status || err.statusCode || 500;
-  
-  // Preparar el mensaje de error
-  const errorResponse = {
+  console.error('Error:', err);
+  res.status(err.status || 500).json({
     success: false,
-    message: err.message || 'Internal server error',
-    code: err.code,
-    timestamp: new Date().toISOString()
-  };
-
-  // Solo incluir stack trace en desarrollo
-  if (process.env.NODE_ENV === 'development') {
-    errorResponse.stack = err.stack;
-  }
-
-  res.status(statusCode).json(errorResponse);
+    message: err.message
+  });
 });
 
 const PORT = process.env.PORT || 3001;
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`WhatsApp service running on port ${PORT}`);
 });
 
-// Función para mantener el servicio activo
-function keepAlive() {
-  const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-  
-  const interval = setInterval(() => {
-    https.get(`${url}/health`, (resp) => {
-      if (resp.statusCode === 200) {
-        console.log('Keepalive check successful');
-      } else {
-        console.warn(`Keepalive check returned status ${resp.statusCode}`);
-      }
-    }).on('error', (err) => {
-      console.error('Keepalive check failed:', err);
-    });
-  }, 5 * 60 * 1000); // Cada 5 minutos
-
-  // Limpiar intervalo al apagar el servidor
-  process.on('SIGTERM', () => {
-    clearInterval(interval);
-    server.close(() => {
-      console.log('Server shutting down gracefully');
-      process.exit(0);
-    });
-  });
-}
-
-// Iniciar keepAlive en producción
-if (process.env.NODE_ENV === 'production') {
-  keepAlive();
-}
-
-// Manejar errores no capturados
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  // Intentar cerrar el servidor de manera limpia
+// Graceful shutdown
+process.on('SIGTERM', () => {
   server.close(() => {
-    console.log('Server closed due to uncaught exception');
-    process.exit(1);
+    console.log('WhatsApp service terminated');
   });
 });
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // No cerramos el servidor, solo loggeamos el error
-});
-
-module.exports = server;
