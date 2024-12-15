@@ -7,7 +7,15 @@ const messageRouter = require('./routes/messages');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// Configuración de CORS
+app.use(cors({
+  origin: ['https://mipctemuco.netlify.app', 'http://localhost:5173'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  credentials: true
+}));
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -32,6 +40,7 @@ app.get('/login/:userId', (req, res) => {
 
 // QR code endpoint
 app.get('/api/qr/:userId', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
   try {
     const { userId } = req.params;
     const { getConnection } = require('./lib/baileys');

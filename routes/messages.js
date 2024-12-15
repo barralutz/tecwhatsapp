@@ -3,6 +3,14 @@ const router = express.Router();
 const { getFirebase } = require('../lib/firebase');
 const { sendMessage, getConnection } = require('../lib/baileys');
 
+// Configuración CORS para las rutas
+router.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
 // Función para esperar a que la conexión esté lista
 async function waitForConnection(userId, maxAttempts = 3) {
     let attempts = 0;
@@ -37,7 +45,7 @@ router.post('/send', async (req, res) => {
             });
         }
 
-        // Validar que el usuario existe en Firebase
+        // Verificar que el usuario existe en Firebase
         const db = getFirebase().firestore();
         const userDoc = await db.collection('users').doc(userId).get();
 
@@ -70,7 +78,6 @@ router.post('/send', async (req, res) => {
     } catch (error) {
         console.error(`[${requestId}] Error sending message:`, error);
 
-        // Determinar el código de estado apropiado
         let statusCode = 500;
         if (error.message.includes('no está conectado')) {
             statusCode = 503; // Service Unavailable
@@ -81,29 +88,7 @@ router.post('/send', async (req, res) => {
         res.status(statusCode).json({
             success: false,
             error: error.message,
-            requestId // Incluir el requestId para seguimiento
-        });
-    }
-});
-
-// Endpoint para verificar el estado de conexión
-router.get('/status/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const connection = await getConnection(userId);
-        
-        res.json({
-            success: true,
-            status: connection.connected ? 'connected' : 'disconnected',
-            qrRequired: !connection.connected && !!connection.qr,
-            qr: connection.qr, // Incluir el QR si está disponible
-            connecting: connection.connecting
-        });
-    } catch (error) {
-        console.error('Error checking status:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
+            requestId
         });
     }
 });
