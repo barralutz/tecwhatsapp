@@ -8,15 +8,39 @@ require('dotenv').config();
 
 const app = express();
 
-// Configuración de CORS
+// Configuración de CORS mejorada
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://mipctemuco.netlify.app']
-    : ['http://localhost:5173', 'http://localhost:3000'],
+  origin: function(origin, callback) {
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? [
+          'https://mipctemuco.netlify.app',
+          'https://backendst.up.railway.app',
+          'https://whatsapp-service.onrender.com'
+        ]
+      : ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:3001'];
+
+    // Permitir requests sin origin (como mobile apps o curl)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('Origin blocked by CORS:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With', 
+    'Accept', 
+    'Origin',
+    'Access-Control-Allow-Origin',
+    'Access-Control-Allow-Headers'
+  ],
   credentials: true,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  preflightContinue: false,
+  maxAge: 86400 // 24 horas de cache para preflight
 };
 
 // Aplicar CORS
@@ -25,12 +49,29 @@ app.use(cors(corsOptions));
 // Middleware para preflight requests
 app.options('*', cors(corsOptions));
 
-app.use(express.json());
+// Middlewares básicos
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Middleware para logging
+// Middleware para logging mejorado
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url} - Origin: ${req.get('origin')}`);
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(
+      `${new Date().toISOString()} - ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms - Origin: ${req.get('origin')}`
+    );
+  });
+  next();
+});
+
+// Headers de seguridad
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
 
@@ -51,22 +92,29 @@ app.get('/health', async (req, res) => {
 
 // Página de login de WhatsApp
 app.get('/login/:userId', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'qr.html'));
+  res.sendFile(path.join(__dirname, 'public', 'qr.html'));
 });
 
-// QR code endpoint
+// QR code endpoint con mejor manejo de errores
 app.get('/api/qr/:userId', async (req, res) => {
+  const startTime = Date.now();
   try {
     const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId is required'
+      });
+    }
+
     const { getConnection } = require('./lib/baileys');
-    
     const connection = await getConnection(userId);
     
-    // Log del estado de la conexión
     console.log(`QR request for userId ${userId}:`, {
       hasQR: !!connection.qr,
       isConnected: connection.connected,
-      connecting: connection.connecting
+      connecting: connection.connecting,
+      responseTime: Date.now() - startTime
     });
     
     if (connection.qr) {
@@ -90,31 +138,48 @@ app.get('/api/qr/:userId', async (req, res) => {
     console.error('QR error:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message || 'Internal server error',
+      errorTime: Date.now() - startTime
     });
   }
 });
 
-// Verificar estado de WhatsApp
+// Verificar estado de WhatsApp con timeout
 app.get('/api/status/:userId', async (req, res) => {
+  const startTime = Date.now();
   try {
     const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId is required'
+      });
+    }
+
     const { getConnection } = require('./lib/baileys');
     
-    const connection = await getConnection(userId);
+    // Agregar timeout de 30 segundos
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Connection timeout')), 30000)
+    );
+    
+    const connectionPromise = getConnection(userId);
+    const connection = await Promise.race([connectionPromise, timeoutPromise]);
     
     res.json({
       success: true,
       status: connection.connected ? 'connected' : 'disconnected',
       qrRequired: !connection.connected && !!connection.qr,
       qr: connection.qr,
-      connecting: connection.connecting
+      connecting: connection.connecting,
+      responseTime: Date.now() - startTime
     });
   } catch (error) {
     console.error('Status check error:', error);
-    res.status(500).json({
+    res.status(error.message === 'Connection timeout' ? 504 : 500).json({
       success: false,
-      error: error.message
+      error: error.message || 'Internal server error',
+      errorTime: Date.now() - startTime
     });
   }
 });
@@ -136,16 +201,26 @@ app.use('/api/messages', messageRouter);
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found'
+    message: 'Route not found',
+    path: req.originalUrl
   });
 });
 
-// Error handler
+// Error handler mejorado
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('Error:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    timestamp: new Date().toISOString()
+  });
+
   res.status(err.status || 500).json({
     success: false,
-    message: err.message,
+    message: err.message || 'Internal server error',
+    path: req.path,
+    timestamp: new Date().toISOString(),
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
@@ -155,13 +230,18 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`WhatsApp service running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
 });
 
-// Graceful shutdown
+// Graceful shutdown mejorado
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM signal. Closing server...');
   server.close(() => {
     console.log('WhatsApp service terminated');
     process.exit(0);
   });
+  // Forzar cierre después de 30 segundos
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 30000);
 });
 
 // Handle uncaught exceptions
@@ -171,6 +251,11 @@ process.on('uncaughtException', (error) => {
     console.log('Server closed due to uncaught exception');
     process.exit(1);
   });
+  // Forzar cierre después de 30 segundos
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 30000);
 });
 
 // Handle unhandled rejections
@@ -180,4 +265,9 @@ process.on('unhandledRejection', (reason, promise) => {
     console.log('Server closed due to unhandled rejection');
     process.exit(1);
   });
+  // Forzar cierre después de 30 segundos
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 30000);
 });
