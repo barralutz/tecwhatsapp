@@ -1,0 +1,18 @@
+{
+    "ignore": [
+      "auth/*",
+      "auth/**/*",
+      ".wwebjs_auth/*",
+      "*.json",
+      "public/*",
+      "node_modules/*",
+      "*.log"
+    ],
+    "watch": [
+      "index.js",
+      "routes/",
+      "lib/"
+    ],
+    "ext": "js",
+    "quiet": true
+  }
