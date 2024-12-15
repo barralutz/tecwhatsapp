@@ -8,25 +8,9 @@ require('dotenv').config();
 
 const app = express();
 
-// Configuración de CORS mejorada
+// Configuración de CORS mejorada y más permisiva para producción
 const corsOptions = {
-  origin: function(origin, callback) {
-    const allowedOrigins = process.env.NODE_ENV === 'production' 
-      ? [
-          'https://mipctemuco.netlify.app',
-          'https://backendst.up.railway.app',
-          'https://whatsapp-service.onrender.com'
-        ]
-      : ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:3001'];
-
-    // Permitir requests sin origin (como mobile apps o curl)
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log('Origin blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: true, // Permite todos los orígenes
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type', 
@@ -35,19 +19,28 @@ const corsOptions = {
     'Accept', 
     'Origin',
     'Access-Control-Allow-Origin',
-    'Access-Control-Allow-Headers'
+    'Access-Control-Allow-Headers',
+    'Access-Control-Allow-Methods'
   ],
   credentials: true,
   optionsSuccessStatus: 200,
   preflightContinue: false,
-  maxAge: 86400 // 24 horas de cache para preflight
+  maxAge: 86400
 };
 
-// Aplicar CORS
+// Aplicar CORS como primer middleware
 app.use(cors(corsOptions));
 
 // Middleware para preflight requests
 app.options('*', cors(corsOptions));
+
+// Headers de CORS adicionales para cada respuesta
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With, Accept, Origin');
+  next();
+});
 
 // Middlewares básicos
 app.use(express.json({ limit: '50mb' }));
@@ -66,17 +59,28 @@ app.use((req, res, next) => {
   next();
 });
 
-// Headers de seguridad
+// Headers de seguridad (modificados para permitir iframe en desarrollo)
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  
   next();
 });
 
-// Health check endpoint
+// Health check endpoint con timeout
 app.get('/health', async (req, res) => {
+  const timeout = setTimeout(() => {
+    res.status(503).json({ 
+      status: 'error', 
+      error: 'Health check timeout' 
+    });
+  }, 5000);
+
   try {
     res.json({ 
       status: 'ok', 
@@ -87,6 +91,8 @@ app.get('/health', async (req, res) => {
   } catch (error) {
     console.error('Health check failed:', error);
     res.status(500).json({ status: 'error', error: error.message });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
@@ -95,12 +101,21 @@ app.get('/login/:userId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'qr.html'));
 });
 
-// QR code endpoint con mejor manejo de errores
+// QR code endpoint con mejor manejo de errores y timeout
 app.get('/api/qr/:userId', async (req, res) => {
   const startTime = Date.now();
+  const timeout = setTimeout(() => {
+    res.status(504).json({
+      success: false,
+      error: 'Request timeout',
+      errorTime: Date.now() - startTime
+    });
+  }, 30000);
+
   try {
     const { userId } = req.params;
     if (!userId) {
+      clearTimeout(timeout);
       return res.status(400).json({
         success: false,
         error: 'userId is required'
@@ -116,6 +131,8 @@ app.get('/api/qr/:userId', async (req, res) => {
       connecting: connection.connecting,
       responseTime: Date.now() - startTime
     });
+
+    clearTimeout(timeout);
     
     if (connection.qr) {
       res.json({
@@ -135,6 +152,7 @@ app.get('/api/qr/:userId', async (req, res) => {
       });
     }
   } catch (error) {
+    clearTimeout(timeout);
     console.error('QR error:', error);
     res.status(500).json({
       success: false,
@@ -144,12 +162,21 @@ app.get('/api/qr/:userId', async (req, res) => {
   }
 });
 
-// Verificar estado de WhatsApp con timeout
+// Verificar estado de WhatsApp con timeout optimizado
 app.get('/api/status/:userId', async (req, res) => {
   const startTime = Date.now();
+  const timeout = setTimeout(() => {
+    res.status(504).json({
+      success: false,
+      error: 'Connection timeout',
+      errorTime: Date.now() - startTime
+    });
+  }, 30000);
+
   try {
     const { userId } = req.params;
     if (!userId) {
+      clearTimeout(timeout);
       return res.status(400).json({
         success: false,
         error: 'userId is required'
@@ -157,15 +184,9 @@ app.get('/api/status/:userId', async (req, res) => {
     }
 
     const { getConnection } = require('./lib/baileys');
+    const connection = await getConnection(userId);
     
-    // Agregar timeout de 30 segundos
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Connection timeout')), 30000)
-    );
-    
-    const connectionPromise = getConnection(userId);
-    const connection = await Promise.race([connectionPromise, timeoutPromise]);
-    
+    clearTimeout(timeout);
     res.json({
       success: true,
       status: connection.connected ? 'connected' : 'disconnected',
@@ -175,8 +196,9 @@ app.get('/api/status/:userId', async (req, res) => {
       responseTime: Date.now() - startTime
     });
   } catch (error) {
+    clearTimeout(timeout);
     console.error('Status check error:', error);
-    res.status(error.message === 'Connection timeout' ? 504 : 500).json({
+    res.status(500).json({
       success: false,
       error: error.message || 'Internal server error',
       errorTime: Date.now() - startTime
@@ -184,13 +206,21 @@ app.get('/api/status/:userId', async (req, res) => {
   }
 });
 
-// Initialize Firebase
+// Initialize Firebase with retry
 (async () => {
-  try {
-    await initializeFirebase();
-    console.log('Firebase initialized successfully');
-  } catch (error) {
-    console.error('Failed to initialize Firebase:', error);
+  let retries = 3;
+  while (retries > 0) {
+    try {
+      await initializeFirebase();
+      console.log('Firebase initialized successfully');
+      break;
+    } catch (error) {
+      retries--;
+      console.error(`Failed to initialize Firebase (${retries} retries left):`, error);
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
   }
 })();
 
@@ -226,48 +256,44 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3001;
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`WhatsApp service running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
-});
+let server;
 
-// Graceful shutdown mejorado
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM signal. Closing server...');
-  server.close(() => {
-    console.log('WhatsApp service terminated');
-    process.exit(0);
+try {
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`WhatsApp service running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
   });
-  // Forzar cierre después de 30 segundos
-  setTimeout(() => {
-    console.error('Could not close connections in time, forcefully shutting down');
-    process.exit(1);
-  }, 30000);
-});
+} catch (error) {
+  console.error('Failed to start server:', error);
+  process.exit(1);
+}
 
-// Handle uncaught exceptions
+// Función de limpieza
+const cleanup = () => {
+  if (server) {
+    server.close(() => {
+      console.log('Server closed gracefully');
+      process.exit(0);
+    });
+
+    // Forzar cierre después de 30 segundos
+    setTimeout(() => {
+      console.error('Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 30000);
+  }
+};
+
+// Gestión de señales del sistema
+process.on('SIGTERM', cleanup);
+process.on('SIGINT', cleanup);
+
+// Manejo de errores no capturados
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
-  server.close(() => {
-    console.log('Server closed due to uncaught exception');
-    process.exit(1);
-  });
-  // Forzar cierre después de 30 segundos
-  setTimeout(() => {
-    console.error('Could not close connections in time, forcefully shutting down');
-    process.exit(1);
-  }, 30000);
+  cleanup();
 });
 
-// Handle unhandled rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  server.close(() => {
-    console.log('Server closed due to unhandled rejection');
-    process.exit(1);
-  });
-  // Forzar cierre después de 30 segundos
-  setTimeout(() => {
-    console.error('Could not close connections in time, forcefully shutting down');
-    process.exit(1);
-  }, 30000);
+  cleanup();
 });
