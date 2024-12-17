@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const { initializeFirebase } = require('./lib/firebase');
 const messageRouter = require('./routes/messages');
+const settingsRouter = require('./api/settings');
 
 require('dotenv').config();
 
@@ -33,6 +34,7 @@ app.use(cors(corsOptions));
 
 // Middleware para preflight requests
 app.options('*', cors(corsOptions));
+app.use('/api', settingsRouter);
 
 // Headers de CORS adicionales para cada respuesta
 app.use((req, res, next) => {
@@ -162,6 +164,108 @@ app.get('/api/qr/:userId', async (req, res) => {
   }
 });
 
+
+// Endpoint para reconexión automática
+app.post('/api/reconnect/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId is required'
+      });
+    }
+
+    const { getConnection, initializeConnection } = require('./lib/baileys');
+    
+    // Intentar obtener conexión existente primero
+    try {
+      const connection = await getConnection(userId);
+      
+      if (connection.connected) {
+        return res.json({
+          success: true,
+          status: 'connected'
+        });
+      }
+    } catch (connectionError) {
+      console.error('Error getting existing connection:', connectionError);
+    }
+
+    // Si no hay conexión o falló, intentar inicializar una nueva
+    try {
+      await initializeConnection(userId, true); // force new connection
+      const newConnection = await getConnection(userId);
+      
+      res.json({
+        success: true,
+        status: newConnection.connected ? 'connected' : 'initializing',
+        qrRequired: !newConnection.connected && !!newConnection.qr,
+        qr: newConnection.qr
+      });
+    } catch (initError) {
+      throw new Error(`Error initializing connection: ${initError.message}`);
+    }
+
+  } catch (error) {
+    console.error('Reconnection error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Internal server error'
+    });
+  }
+});
+
+
+app.post('/api/unlink/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId is required'
+      });
+    }
+
+    const { getConnection } = require('./lib/baileys');
+    const fs = require('fs');
+    const path = require('path');
+
+    // Obtener la conexión actual
+    const connection = await getConnection(userId);
+    
+    // Cerrar la conexión si existe
+    if (connection && connection.socket) {
+      await connection.socket.logout();
+      await connection.socket.end();
+    }
+
+    // Eliminar archivos de autenticación
+    const AUTH_DIR = path.join(process.cwd(), 'auth', userId);
+    if (fs.existsSync(AUTH_DIR)) {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    }
+
+    // Limpiar la conexión del mapa de conexiones
+    const connections = new Map(); // Asegúrate de tener acceso al mapa de conexiones
+    connections.delete(userId);
+
+    res.json({
+      success: true,
+      message: 'WhatsApp desvinculado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error unlinking WhatsApp:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Error al desvincular WhatsApp'
+    });
+  }
+});
+
 // Verificar estado de WhatsApp con timeout optimizado
 app.get('/api/status/:userId', async (req, res) => {
   const startTime = Date.now();
@@ -186,22 +290,33 @@ app.get('/api/status/:userId', async (req, res) => {
     const { getConnection } = require('./lib/baileys');
     const connection = await getConnection(userId);
     
+    console.log(`Estado de WhatsApp para ${userId}:`, {
+      hasQR: !!connection.qr,
+      isConnected: connection.connected,
+      connecting: connection.connecting
+    });
+
     clearTimeout(timeout);
+
+    // Responder con estado detallado
     res.json({
       success: true,
       status: connection.connected ? 'connected' : 'disconnected',
+      connected: connection.connected,
       qrRequired: !connection.connected && !!connection.qr,
       qr: connection.qr,
       connecting: connection.connecting,
       responseTime: Date.now() - startTime
     });
+
   } catch (error) {
     clearTimeout(timeout);
-    console.error('Status check error:', error);
+    console.error('Error en status:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Internal server error',
-      errorTime: Date.now() - startTime
+      errorTime: Date.now() - startTime,
+      status: 'error'
     });
   }
 });

@@ -6,9 +6,14 @@ const { sendMessage, getConnection } = require('../lib/baileys');
 // Configuración CORS para las rutas
 router.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   next();
+});
+
+// Manejar preflight requests
+router.options('*', (req, res) => {
+  res.sendStatus(200);
 });
 
 // Función para esperar a que la conexión esté lista
@@ -45,7 +50,7 @@ router.post('/send', async (req, res) => {
             });
         }
 
-        // Verificar que el usuario existe en Firebase
+        // Validar que el usuario existe en Firebase
         const db = getFirebase().firestore();
         const userDoc = await db.collection('users').doc(userId).get();
 
@@ -89,6 +94,28 @@ router.post('/send', async (req, res) => {
             success: false,
             error: error.message,
             requestId
+        });
+    }
+});
+
+// Endpoint para verificar el estado de conexión
+router.get('/status/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const connection = await getConnection(userId);
+        
+        res.json({
+            success: true,
+            status: connection.connected ? 'connected' : 'disconnected',
+            qrRequired: !connection.connected && !!connection.qr,
+            qr: connection.qr,
+            connecting: connection.connecting
+        });
+    } catch (error) {
+        console.error('Error checking status:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 });
