@@ -3,8 +3,6 @@ const cors = require('cors');
 const path = require('path');
 const { initializeFirebase } = require('./lib/firebase');
 const messageRouter = require('./routes/messages');
-const settingsRouter = require('./api/settings');
-
 require('dotenv').config();
 
 const app = express();
@@ -34,7 +32,6 @@ app.use(cors(corsOptions));
 
 // Middleware para preflight requests
 app.options('*', cors(corsOptions));
-app.use('/api', settingsRouter);
 
 // Headers de CORS adicionales para cada respuesta
 app.use((req, res, next) => {
