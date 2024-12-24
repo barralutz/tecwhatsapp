@@ -19,6 +19,7 @@
             border: 10px solid white;
             border-radius: 10px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
         }
         .status {
             margin: 20px;
@@ -26,6 +27,7 @@
             border-radius: 5px;
             background: #fff;
             box-shadow: 0 0 5px rgba(0,0,0,0.05);
+            text-align: center;
         }
         .error {
             color: #dc3545;
@@ -34,6 +36,7 @@
             border-radius: 5px;
             margin-top: 10px;
             display: none;
+            text-align: center;
         }
         .refresh-button {
             padding: 10px 20px;
@@ -44,6 +47,8 @@
             cursor: pointer;
             display: none;
             margin-top: 10px;
+            font-size: 16px;
+            transition: background 0.3s ease;
         }
         .refresh-button:hover {
             background: #128c7e;
@@ -58,16 +63,30 @@
             margin: 20px;
             display: none;
         }
+        .attempts {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+            display: none;
+        }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        .fade {
+            animation: fade 1s ease-in;
+        }
+        @keyframes fade {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body>
-    <div class="status" id="status">Esperando código QR...</div>
+    <div class="status" id="status">Inicializando WhatsApp...</div>
+    <div class="attempts" id="attempts"></div>
     <div class="loading" id="loading"></div>
-    <img id="qrImage" style="display: none;">
+    <img id="qrImage" style="display: none;" alt="Código QR de WhatsApp">
     <div class="error" id="error"></div>
     <button class="refresh-button" id="refreshButton" onclick="handleRefresh()">Reintentar conexión</button>
 
@@ -75,24 +94,42 @@
         const userId = window.location.pathname.split('/').pop();
         let qrChecks = 0;
         let isConnected = false;
-        const MAX_QR_CHECKS = 30; // 2.5 minutos máximo de espera
+        const MAX_QR_CHECKS = 30;
         let checkTimer = null;
+        let currentQR = null;
+
+        function updateAttempts(attempt, max) {
+            const attemptsDiv = document.getElementById('attempts');
+            attemptsDiv.style.display = 'block';
+            attemptsDiv.textContent = `Intento ${attempt} de ${max}`;
+        }
 
         async function handleRefresh() {
             try {
-                document.getElementById('refreshButton').style.display = 'none';
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('error').style.display = 'none';
-                document.getElementById('status').textContent = 'Reiniciando conexión...';
+                const refreshButton = document.getElementById('refreshButton');
+                const loading = document.getElementById('loading');
+                const error = document.getElementById('error');
+                const status = document.getElementById('status');
+                const attemptsDiv = document.getElementById('attempts');
 
-                // Llamar al endpoint de reconexión
+                refreshButton.style.display = 'none';
+                loading.style.display = 'block';
+                error.style.display = 'none';
+                attemptsDiv.style.display = 'none';
+                status.textContent = 'Reiniciando conexión...';
+
                 const response = await fetch(`/api/reconnect/${userId}`, {
-                    method: 'POST'
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
                 });
+
                 const data = await response.json();
 
                 if (data.success) {
                     qrChecks = 0;
+                    currentQR = null;
                     checkStatus();
                 } else {
                     throw new Error(data.error || 'Error al reiniciar conexión');
@@ -104,20 +141,24 @@
 
         function showError(message) {
             const errorDiv = document.getElementById('error');
+            const refreshButton = document.getElementById('refreshButton');
+            const loading = document.getElementById('loading');
+            const attemptsDiv = document.getElementById('attempts');
+
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
-            document.getElementById('refreshButton').style.display = 'block';
-            document.getElementById('loading').style.display = 'none';
+            refreshButton.style.display = 'block';
+            loading.style.display = 'none';
+            attemptsDiv.style.display = 'none';
         }
 
         async function checkStatus() {
-            try {
-                if (qrChecks >= MAX_QR_CHECKS) {
-                    showError('Tiempo de espera agotado. Por favor, intenta de nuevo.');
-                    return;
-                }
+            if (checkTimer) {
+                clearTimeout(checkTimer);
+            }
 
-                if (isConnected) {
+            try {
+                if (qrChecks >= MAX_QR_CHECKS || isConnected) {
                     return;
                 }
 
@@ -128,23 +169,31 @@
                 const qrImage = document.getElementById('qrImage');
                 const loading = document.getElementById('loading');
                 
-                if (data.status === 'connected') {
+                if (data.status === 'connected' || data.connected) {
                     isConnected = true;
                     statusDiv.textContent = '¡WhatsApp conectado exitosamente!';
                     qrImage.style.display = 'none';
                     loading.style.display = 'none';
-                    clearTimeout(checkTimer);
-                    // Redirigir después de 3 segundos
+                    document.getElementById('attempts').style.display = 'none';
+                    
                     setTimeout(() => {
                         window.close();
                     }, 3000);
                     return;
-                } else if (data.qr) {
+                }
+
+                if (data.qr && data.qr !== currentQR) {
+                    currentQR = data.qr;
                     statusDiv.textContent = 'Escanea este código QR con WhatsApp';
                     qrImage.src = data.qr;
                     qrImage.style.display = 'block';
+                    qrImage.classList.add('fade');
                     loading.style.display = 'none';
                     qrChecks++;
+                    
+                    if (data.attempts) {
+                        updateAttempts(data.attempts, 5);
+                    }
                 } else if (data.error) {
                     showError(data.error);
                     return;
@@ -154,8 +203,7 @@
                     loading.style.display = 'block';
                 }
                 
-                // Programar siguiente verificación
-                checkTimer = setTimeout(checkStatus, 5000);
+                checkTimer = setTimeout(checkStatus, 2000);
             } catch (error) {
                 console.error('Error:', error);
                 showError('Error de conexión. Reintentando...');
@@ -163,10 +211,10 @@
             }
         }
         
-        // Iniciar verificación de estado
+        // Iniciar verificación
         checkStatus();
 
-        // Limpiar temporizador al cerrar la ventana
+        // Limpieza al cerrar
         window.onbeforeunload = () => {
             if (checkTimer) {
                 clearTimeout(checkTimer);
